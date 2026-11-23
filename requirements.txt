@@ -1,0 +1,11 @@
+pandas
+requests
+python-dotenv
+scikit-learn
+joblib
+matplotlib
+seaborn
+plotly
+folium
+streamlit
+streamlit-folium

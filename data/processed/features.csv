@@ -1,0 +1,1 @@
+station_id,time,bikes_now,bikes_15min_ago,bikes_30min_ago,hour,weekday,is_weekend,temperature,is_rain,capacity,bikes_after_30min

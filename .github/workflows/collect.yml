@@ -1,0 +1,71 @@
+# =============================================================================
+# 用 GitHub Actions 每 5 分鐘自動抓一次 YouBike 資料（備案）
+#
+# ⚠️ 請先讀：
+#   1. GitHub Actions 的排程「不準時」：尖峰時段常延遲 5~30 分鐘，甚至整次被跳過，
+#      所以資料間隔會不平均。主要方案仍是「一台常開的電腦」用工作排程器跑 collect.py。
+#   2. 這個備案「只在沒有常開電腦時」才啟用。預設是關閉的：
+#      排程每 5 分鐘會觸發，但 job 會直接跳過，直到你在 repo 設定變數：
+#        Settings → Secrets and variables → Actions → Variables 分頁
+#        → New repository variable：名稱 ENABLE_ACTIONS_COLLECT，值 true
+#      想停用時把值改成 false（或刪掉）即可。
+#   3. 不要「常開電腦」和「Actions」同時開，否則同一時段會有兩份資料、git 也容易衝突。
+#   4. 需要先在 Settings → Secrets and variables → Actions → Secrets 新增
+#      TDX_CLIENT_ID 與 TDX_CLIENT_SECRET。
+#   5. 每次執行都會產生一個 commit，所以 commit 紀錄會很多，這是正常的。
+# =============================================================================
+
+name: collect-youbike
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"   # 每 5 分鐘（GitHub 使用 UTC 時間，但每 5 分鐘不受時區影響）
+  workflow_dispatch:         # 也可以在 Actions 頁面手動按「Run workflow」測試
+
+permissions:
+  contents: write            # 允許把新資料 commit 推回 repo
+
+concurrency:
+  group: collect-youbike     # 同一時間只跑一個，避免兩次執行互相衝突
+  cancel-in-progress: false
+
+jobs:
+  collect:
+    # 手動觸發一律執行；排程觸發只有在 ENABLE_ACTIONS_COLLECT=true 時才執行
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_ACTIONS_COLLECT == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: 下載程式碼
+        uses: actions/checkout@v4
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 安裝套件（collect.py 只需要這兩個）
+        run: pip install requests python-dotenv
+
+      - name: 執行 collect.py
+        env:
+          TDX_CLIENT_ID: ${{ secrets.TDX_CLIENT_ID }}
+          TDX_CLIENT_SECRET: ${{ secrets.TDX_CLIENT_SECRET }}
+        run: python collect/collect.py
+
+      - name: 把新增的 CSV commit 並推回 repo
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/stations.csv data/raw/youbike_raw.csv
+          if git diff --cached --quiet; then
+            echo "沒有新資料，不需要 commit"
+            exit 0
+          fi
+          git commit -m "data: auto collect $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M')"
+          # 推送前先同步遠端，避免組員剛好也推了東西而失敗
+          for i in 1 2 3; do
+            git pull --rebase && git push && exit 0
+            sleep 5
+          done
+          echo "推送失敗" && exit 1

@@ -1,0 +1,27 @@
+# ===== 金鑰（絕對不能上傳）=====
+.env
+.env.*
+!.env.example
+
+# ===== 虛擬環境 =====
+.venv/
+venv/
+env/
+
+# ===== Python 自動產生的檔案 =====
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# ===== 執行紀錄（每台電腦各自產生，避免 git 衝突）=====
+logs/*.log
+
+# ===== 編輯器 / 系統 =====
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# 注意：data/ 與 results/ 刻意「不」忽略，要一起上傳讓組員共用

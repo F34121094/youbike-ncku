@@ -1,3 +1,7 @@
 # 統一換行字元為 LF，避免 Windows / Mac / GitHub Actions 之間的 CSV 出現整份檔案都不同的假差異
 * text=auto eol=lf
 *.joblib binary
+
+# 只會「往後 append」的檔案：合併 / rebase 時兩邊新增的行都保留，避免 GitHub Actions 與組員的 commit 互相衝突
+data/raw/youbike_raw.csv merge=union
+logs/collect.log merge=union

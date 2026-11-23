@@ -10,7 +10,7 @@
 
 | 步驟 | 負責的程式 | 做什麼 |
 |---|---|---|
-| 1. 收集資料 | `collect/collect.py` | 每 5 分鐘向交通部 TDX 抓一次台南市 YouBike 即時車數，只留成大周圍 1.5 公里內的站 |
+| 1. 收集資料 | `collect/collect.py` | 每 15 分鐘向交通部 TDX 抓一次台南市 YouBike 即時車數，只留成大周圍 1.5 公里內的站（目前 61 站） |
 | 2. 整理資料 | `process/clean.py` | 清理資料、算出「現在車數、15/30 分鐘前車數、幾點、星期幾、天氣」等特徵 |
 | 3. 訓練模型 | `model/train.py` | 用特徵預測 30 分鐘後的可借車數，比較幾個模型的誤差 |
 | 4. 做網站 | `app/app.py` | 用 Streamlit 做網頁，在地圖上顯示每站的預測結果 |
@@ -27,18 +27,19 @@ youbike-ncku/
 ├── .gitignore                 ← 告訴 git 哪些檔案不要上傳（例如金鑰 .env）
 ├── .env.example               ← 金鑰檔範本（複製成 .env 再填入真的金鑰）
 ├── data/
-│   ├── stations.csv           ← 站點資訊（collect.py 產生）
-│   ├── raw/youbike_raw.csv    ← 原始可借車數，每 5 分鐘累積一批（collect.py 產生）
+│   ├── stations.csv           ← 站點資訊（collect.py 第一次執行時產生）
+│   ├── raw/youbike_raw.csv    ← 原始可借車數，每 15 分鐘累積一批（collect.py 產生）
 │   └── processed/features.csv ← 整理好的特徵表（clean.py 產生）
 ├── collect/collect.py         ← 步驟 1：抓資料
 ├── process/clean.py           ← 步驟 2：整理資料
 ├── model/train.py             ← 步驟 3：訓練模型
 ├── app/app.py                 ← 步驟 4：網站
+├── tools/check_data.py        ← 檢查收集到的資料、估算 TDX 點數
 ├── tools/make_fake_data.py    ← 產生假資料（開發用）
 ├── models/                    ← 訓練好的模型 model.joblib（train.py 產生）
 ├── results/                   ← 評估結果 metrics.csv、predictions.csv（train.py 產生）
-├── logs/                      ← 執行紀錄 collect.log（collect.py 產生，不上傳）
-└── .github/workflows/collect.yml ← GitHub Actions 自動抓資料（備案）
+├── logs/                      ← 執行紀錄 collect.log（collect.py 產生，會上傳，用來估算點數）
+└── .github/workflows/collect.yml ← GitHub Actions 每 15 分鐘自動抓資料
 ```
 
 每個資料夾裡都有一份 `README.md`，寫著該資料夾的輸入、輸出和檢查方式。
@@ -153,14 +154,18 @@ pip install -r requirements.txt
 
 ```bash
 python collect/collect.py
+python tools/check_data.py       # 檢查資料筆數、缺漏時段、累計用掉多少 TDX 點數
 ```
 
-成功時畫面會印出 API 的第一筆回傳（用來檢查欄位），並在 `data/stations.csv`、`data/raw/youbike_raw.csv` 寫入資料。
+成功時畫面會印出 API 的第一筆回傳（用來檢查欄位），並在 `data/raw/youbike_raw.csv` 加上一批資料（第一次執行還會產生 `data/stations.csv`、印出篩到的站名清單）。
 有錯誤時請看 `logs/collect.log`。
 
-這支程式「跑一次就抓一次」。要每 5 分鐘自動抓，請用一台常開的電腦設定排程：
-- Windows：「工作排程器」→ 建立基本工作 → 觸發程序選「每天」，進階設定裡設「每 5 分鐘重複一次」，動作執行 `.venv\Scripts\python.exe`，引數填 `collect/collect.py`，「開始位置」填專案資料夾路徑。
-- Mac / Linux：`crontab -e` 加入 `*/5 * * * * cd /專案路徑 && .venv/bin/python collect/collect.py`
+> ⚠️ **TDX 點數只有 3 點**（點數 = 呼叫次數 ÷ 1500 + 傳輸量 MB ÷ 150）。每 15 分鐘抓一次約 0.07 點／天，**大約只夠抓 40 天**。
+> 請不要隨意手動多跑、也不要同時開兩種排程。詳細說明見 `collect/README.md`。
+
+這支程式「跑一次就抓一次」。要每 15 分鐘自動抓，有兩種方式（**只能選一種**）：
+- **本機排程**（Windows 工作排程器／Mac、Linux cron）：需要一台常開、不睡眠的電腦，時間最準。一步一步的設定方式見 [`collect/README.md`](collect/README.md#本機排程讓電腦每-15-分鐘自動執行一次)。
+- **GitHub Actions**：不用開電腦，但排程常延遲，見下一節。
 
 ### 6. 其他步驟
 
@@ -173,19 +178,20 @@ streamlit run app/app.py         # 開啟網站（瀏覽器會自動打開）
 
 > ⚠️ 假資料請不要 commit 上傳。用完想還原成空檔案：`git checkout -- data/`
 
-## 如何改用 GitHub Actions 自動抓資料（沒有常開電腦時的備案）
+## 如何用 GitHub Actions 自動抓資料（不需要常開電腦）
 
-GitHub 可以幫我們每 5 分鐘在雲端跑一次 `collect.py`，再把新資料自動 commit 回 repo。
-缺點是**排程常會延遲或被跳過**，所以只在找不到常開電腦時才用。設定檔是 `.github/workflows/collect.yml`。
+GitHub 可以幫我們每 15 分鐘（每小時的 7、22、37、52 分）在雲端跑一次 `collect.py`，再把新資料和 log 自動 commit 回 repo（commit 訊息 `data: update`，沒有新資料就不 commit）。
+缺點是**排程常會延遲或被跳過**；用 `python tools/check_data.py` 看缺漏時段，太嚴重就改用本機排程。設定檔是 `.github/workflows/collect.yml`。
 
 1. **新增金鑰**：到 GitHub repo 頁面 → `Settings` → `Secrets and variables` → `Actions` → `Secrets` 分頁 → `New repository secret`，新增兩個：
    - `TDX_CLIENT_ID`：你的 Client Id
    - `TDX_CLIENT_SECRET`：你的 Client Secret
-2. **手動測試一次**：到 `Actions` 分頁 → 左邊選 `collect-youbike` → `Run workflow`。跑完（綠色勾勾）後，repo 裡應該會多一個 `data: auto collect ...` 的 commit。
+2. **手動測試一次**：到 `Actions` 分頁 → 左邊選 `collect-youbike` → `Run workflow`。跑完（綠色勾勾）後，repo 裡應該會多一個 `data: update` 的 commit。
 3. **開啟自動排程**：同一個 `Secrets and variables` → `Actions` 頁面，切到 `Variables` 分頁 → `New repository variable`，名稱 `ENABLE_ACTIONS_COLLECT`、值 `true`。
 4. **停用**：把 `ENABLE_ACTIONS_COLLECT` 改成 `false`。
 
 注意事項：
 - 開啟 Actions 後，資料會由 GitHub 直接 commit，組員開始工作前請先 `git pull`，避免衝突。
-- 不要同時開「常開電腦排程」和「GitHub Actions」，否則會重複抓。
-- public repo 的 Actions 免費；private repo 每月有免費分鐘數上限（GitHub Free 約 2,000 分鐘），每 5 分鐘跑一次大約會用掉 8,000 分鐘以上，**private repo 很可能會超過額度**，這種情況請把 repo 改成 public 或改用常開電腦。
+  （`youbike_raw.csv` 和 `collect.log` 在 `.gitattributes` 設了 `merge=union`，兩邊都只是新增資料時會自動合併。）
+- 不要同時開「本機排程」和「GitHub Actions」，否則會重複抓、浪費 TDX 點數。
+- public repo 的 Actions 免費；private repo 每月有免費分鐘數上限（GitHub Free 約 2,000 分鐘）。每 15 分鐘跑一次，每次至少算 1 分鐘，一個月約 2,900 分鐘，**private repo 會超過額度**，這種情況請把 repo 改成 public 或改用本機排程。

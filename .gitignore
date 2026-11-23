@@ -15,8 +15,11 @@ __pycache__/
 .pytest_cache/
 .ipynb_checkpoints/
 
-# ===== 執行紀錄（每台電腦各自產生，避免 git 衝突）=====
+# ===== 執行紀錄 =====
+# collect.log 要上傳（GitHub Actions 會 commit 它，tools/check_data.py 用它估算 TDX 點數）；
+# 其他 .log 不上傳
 logs/*.log
+!logs/collect.log
 
 # ===== 編輯器 / 系統 =====
 .vscode/

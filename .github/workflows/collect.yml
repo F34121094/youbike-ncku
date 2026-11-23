@@ -1,32 +1,34 @@
 # =============================================================================
-# 用 GitHub Actions 每 5 分鐘自動抓一次 YouBike 資料（備案）
+# 用 GitHub Actions 每 15 分鐘自動抓一次 YouBike 資料（備案）
 #
 # ⚠️ 請先讀：
 #   1. GitHub Actions 的排程「不準時」：尖峰時段常延遲 5~30 分鐘，甚至整次被跳過，
-#      所以資料間隔會不平均。主要方案仍是「一台常開的電腦」用工作排程器跑 collect.py。
-#   2. 這個備案「只在沒有常開電腦時」才啟用。預設是關閉的：
-#      排程每 5 分鐘會觸發，但 job 會直接跳過，直到你在 repo 設定變數：
+#      所以資料間隔會不平均。若延遲太嚴重（用 python tools/check_data.py 看缺漏時段），
+#      請改由「一台常開的電腦」用本機排程跑 collect.py（做法見 collect/README.md）。
+#   2. cron 刻意設在每小時的 7、22、37、52 分，避開整點與半點（那時全世界的排程最擠、最容易延遲）。
+#      GitHub 的 cron 用 UTC 時間，但「每 15 分鐘」不受時區影響。
+#   3. 這個備案預設是關閉的：排程會觸發，但 job 會直接跳過，直到你在 repo 設定變數：
 #        Settings → Secrets and variables → Actions → Variables 分頁
 #        → New repository variable：名稱 ENABLE_ACTIONS_COLLECT，值 true
-#      想停用時把值改成 false（或刪掉）即可。
-#   3. 不要「常開電腦」和「Actions」同時開，否則同一時段會有兩份資料、git 也容易衝突。
-#   4. 需要先在 Settings → Secrets and variables → Actions → Secrets 新增
+#      想停用時把值改成 false（或刪掉）即可。手動按 Run workflow 則不受這個變數限制。
+#   4. 不要「本機排程」和「Actions」同時開，否則會重複抓、浪費 TDX 點數。
+#   5. 需要先在 Settings → Secrets and variables → Actions → Secrets 新增
 #      TDX_CLIENT_ID 與 TDX_CLIENT_SECRET。
-#   5. 每次執行都會產生一個 commit，所以 commit 紀錄會很多，這是正常的。
+#   6. 每次執行都會產生一個 "data: update" commit，所以 commit 紀錄會很多，這是正常的。
 # =============================================================================
 
 name: collect-youbike
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # 每 5 分鐘（GitHub 使用 UTC 時間，但每 5 分鐘不受時區影響）
-  workflow_dispatch:         # 也可以在 Actions 頁面手動按「Run workflow」測試
+    - cron: "7,22,37,52 * * * *"   # 每 15 分鐘（避開整點與 :30）
+  workflow_dispatch:               # 也可以在 Actions 頁面手動按「Run workflow」測試
 
 permissions:
-  contents: write            # 允許把新資料 commit 推回 repo
+  contents: write                  # 允許把新資料 commit 推回 repo
 
 concurrency:
-  group: collect-youbike     # 同一時間只跑一個，避免兩次執行互相衝突
+  group: collect-youbike           # 同一時間只跑一個，避免兩次執行互相衝突
   cancel-in-progress: false
 
 jobs:
@@ -34,7 +36,7 @@ jobs:
     # 手動觸發一律執行；排程觸發只有在 ENABLE_ACTIONS_COLLECT=true 時才執行
     if: github.event_name == 'workflow_dispatch' || vars.ENABLE_ACTIONS_COLLECT == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - name: 下載程式碼
         uses: actions/checkout@v4
@@ -53,19 +55,25 @@ jobs:
           TDX_CLIENT_SECRET: ${{ secrets.TDX_CLIENT_SECRET }}
         run: python collect/collect.py
 
-      - name: 把新增的 CSV commit 並推回 repo
+      - name: 把變動的 CSV 與 log commit 並推回 repo
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/stations.csv data/raw/youbike_raw.csv
+          git add data/stations.csv data/raw/youbike_raw.csv logs/collect.log
           if git diff --cached --quiet; then
-            echo "沒有新資料，不需要 commit"
+            echo "沒有變動，不需要 commit"
             exit 0
           fi
-          git commit -m "data: auto collect $(TZ=Asia/Taipei date '+%Y-%m-%d %H:%M')"
-          # 推送前先同步遠端，避免組員剛好也推了東西而失敗
+          git commit -m "data: update"
+          # 推送前先同步遠端（組員可能剛好推了東西）。
+          # youbike_raw.csv 與 collect.log 在 .gitattributes 設了 merge=union，
+          # 兩邊都只是往後加資料時，rebase 會自動把兩邊的行都留下，不會卡在衝突。
           for i in 1 2 3; do
-            git pull --rebase && git push && exit 0
-            sleep 5
+            if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then
+              exit 0
+            fi
+            git rebase --abort 2>/dev/null || true
+            echo "第 $i 次推送失敗，10 秒後重試"
+            sleep 10
           done
-          echo "推送失敗" && exit 1
+          echo "推送失敗（3 次）" && exit 1

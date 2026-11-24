@@ -78,3 +78,5 @@
 2026-11-25 03:30:43 [INFO] OK fetch_time=2026-11-25 03:30:42 stations=61 rows=61 tdx_update=2026-11-25T03:30:19+08:00
 2026-11-25 03:45:31 [INFO] API name=Availability status=200 bytes=12095 attempt=1
 2026-11-25 03:45:31 [INFO] OK fetch_time=2026-11-25 03:45:29 stations=61 rows=61 tdx_update=2026-11-25T03:45:19+08:00
+2026-11-25 04:00:55 [INFO] API name=Availability status=200 bytes=12094 attempt=1
+2026-11-25 04:00:55 [INFO] OK fetch_time=2026-11-25 04:00:53 stations=61 rows=61 tdx_update=2026-11-25T04:00:49+08:00

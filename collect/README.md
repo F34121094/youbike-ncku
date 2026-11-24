@@ -192,4 +192,24 @@ GitHub Actions 的 schedule 是「盡力而為」，系統忙的時候會延遲�
    - 手動觸發不會遇到 GitHub 排程的延遲，也不受 `ENABLE_ACTIONS_COLLECT` 限制；改用這個方式時，記得把變數改成 `false`，避免同一個時段跑兩次。
 3. **改回本機排程**（見上方「本機排程」）：找一台常開的電腦執行，並把 `ENABLE_ACTIONS_COLLECT` 改成 `false`。
 
-**後續**：（觀察結果請補在這裡）
+**後續（2026-11-24 晚上）：已改用 cron-job.org 觸發**
+- 觀察到 14:00 仍然只有早上那 1 次排程，之後 18:29 又只跑了 1 次。等於從 11/24 00:46 開啟到 21:00，GitHub 排程總共只觸發 2 次，所以決定採用上面的方法 2。
+- 21:19 從 cron-job.org 按 Test run，回應 204，GitHub Actions 出現一筆 `workflow_dispatch`，結果 success ✅。
+- 目前的設定：
+  - **cron-job.org**：Cronjobs → 新增 `youbike-collect`，每 15 分鐘執行一次，Time zone `Asia/Taipei`。
+    - Request method：`POST`
+    - Request body：`{"ref":"main"}`
+    - Headers：
+      | Key | Value |
+      |---|---|
+      | `Authorization` | `Bearer <token>`（`Bearer` 是固定字，後面空一格再接 token，不要加 `< >`） |
+      | `Accept` | `application/vnd.github+json` |
+  - **GitHub token**：fine-grained PAT，只開放 `youbike-ncku` 這個 repo 的 **Actions: Read and write** 權限。token 只存在 cron-job.org 裡，**不要放進 repo**。token 到期後要重新產生，並更新 cron-job.org 的 header。
+  - **repo 變數** `ENABLE_ACTIONS_COLLECT` 改成 `false`：GitHub 自己的排程觸發時會直接跳過，避免跟 cron-job.org 重複抓。
+- Test run 回傳錯誤時的對照：
+  | 錯誤碼 | 原因 |
+  |---|---|
+  | `401` | token 錯誤，或 `Bearer` 後面少了空格 |
+  | `403` / `404` | token 權限不足，或沒有選到這個 repo |
+  | `422` | body 格式錯誤 |
+- 想停止收集：到 cron-job.org 把這個 job 停用（Enable job 關掉）。

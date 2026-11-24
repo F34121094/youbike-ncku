@@ -144,3 +144,52 @@ git commit -m "data: update"
 git pull --rebase
 git push
 ```
+
+---
+
+## GitHub Actions 排程（備案）
+
+設定檔：`.github/workflows/collect.yml`，cron 為 `7,22,37,52 * * * *`（每 15 分鐘，避開整點與 :30）。
+
+### 開啟方式
+1. Settings → Secrets and variables → Actions → **Secrets**：新增 `TDX_CLIENT_ID`、`TDX_CLIENT_SECRET`。
+2. 同一頁的 **Variables** 分頁：新增 `ENABLE_ACTIONS_COLLECT`，值 `true`（停用時改成 `false`）。
+3. 到 Actions 頁面按「Run workflow」手動測一次，確認成功。
+
+> ⚠️ 本機排程和 GitHub Actions 只能選一個開。
+
+### 疑難排解紀錄：排程幾乎沒有觸發（2026-11-24）
+
+**狀況**
+- 11/24 00:46 開啟（手動 Run workflow 成功），到 10:28 照理應該有約 38 次排程，實際上只在 **08:45 跑了 1 次**（結果正常）。
+- 08:45 這次其實是 08:37 那一格延遲 8 分鐘才觸發。
+
+**檢查結果：設定沒有錯**
+- cron 語法正確，workflow 狀態是 `active`，而且在預設分支 `main` 上（排程只會在預設分支執行）。
+- 不是 `ENABLE_ACTIONS_COLLECT` 的問題：如果排程有觸發、只是變數沒設好，Actions 頁面會留下一筆 **skipped** 紀錄。這次連 skipped 都沒有，代表 GitHub 根本沒有發出排程事件。
+
+**原因**
+GitHub Actions 的 schedule 是「盡力而為」，系統忙的時候會延遲或整次丟掉。剛建立的 repo 和剛加上的排程特別常見，有時要過幾小時到一天才會穩定。
+
+**怎麼檢查**
+- Actions 頁面看執行紀錄：`event` 是 `schedule` 的有幾筆？有沒有 `skipped`？
+- 公開 repo 不用登入也能用 API 查：
+  ```bash
+  curl -s "https://api.github.com/repos/F34121094/youbike-ncku/actions/runs?per_page=30"
+  ```
+- `python tools/check_data.py` 看資料的缺漏時段。
+
+**解決方法（由簡單到可靠）**
+1. **先觀察一段時間**（這次先觀察到 11/24 晚上）：很多時候過一陣子就會開始穩定觸發。
+2. **改用外部服務觸發 `workflow_dispatch`**：例如用 [cron-job.org](https://cron-job.org) 每 15 分鐘送一個 POST 請求：
+   ```
+   POST https://api.github.com/repos/F34121094/youbike-ncku/actions/workflows/collect.yml/dispatches
+   Header: Authorization: Bearer <PAT>
+           Accept: application/vnd.github+json
+   Body:   {"ref": "main"}
+   ```
+   - PAT 用 fine-grained token，只給這個 repo 的 **Actions: Read and write** 權限。
+   - 手動觸發不會遇到 GitHub 排程的延遲，也不受 `ENABLE_ACTIONS_COLLECT` 限制；改用這個方式時，記得把變數改成 `false`，避免同一個時段跑兩次。
+3. **改回本機排程**（見上方「本機排程」）：找一台常開的電腦執行，並把 `ENABLE_ACTIONS_COLLECT` 改成 `false`。
+
+**後續**：（觀察結果請補在這裡）

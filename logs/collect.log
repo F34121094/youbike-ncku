@@ -484,3 +484,11 @@
 <hr><center>nginx</center>
 <script type="text/javascript" src="/_Incapsula_Resource?SWJIYLWA=719d34
 2026-11-25 22:15:42 [INFO] OK fetch_time=2026-11-25 22:15:40 stations=61 rows=61 source=tdx update=2026-11-25T22:15:14+08:00
+2026-11-25 22:30:45 [INFO] API name=Availability status=200 bytes=12083 attempt=1
+2026-11-25 22:30:46 [ERROR] YouBike 官方：YouBikeOfficial 請求失敗（不重試）：HTTP 403: <html>
+<head><title>403 Forbidden</title></head>
+<body>
+<center><h1>403 Forbidden</h1></center>
+<hr><center>nginx</center>
+<script type="text/javascript" src="/_Incapsula_Resource?SWJIYLWA=719d34
+2026-11-25 22:30:46 [INFO] OK fetch_time=2026-11-25 22:30:43 stations=61 rows=61 source=tdx update=2026-11-25T22:30:44+08:00

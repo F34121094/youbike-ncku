@@ -59,14 +59,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add data/stations.csv data/raw/youbike_raw.csv logs/collect.log
+          git add data/stations.csv data/raw/youbike_raw.csv data/raw/youbike_official_raw.csv logs/collect.log
           if git diff --cached --quiet; then
             echo "沒有變動，不需要 commit"
             exit 0
           fi
           git commit -m "data: update"
           # 推送前先同步遠端（組員可能剛好推了東西）。
-          # youbike_raw.csv 與 collect.log 在 .gitattributes 設了 merge=union，
+          # youbike_raw.csv、youbike_official_raw.csv 與 collect.log 在 .gitattributes 設了 merge=union，
           # 兩邊都只是往後加資料時，rebase 會自動把兩邊的行都留下，不會卡在衝突。
           for i in 1 2 3; do
             if git pull --rebase origin "${GITHUB_REF_NAME}" && git push origin "HEAD:${GITHUB_REF_NAME}"; then

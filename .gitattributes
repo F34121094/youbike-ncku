@@ -4,4 +4,5 @@
 
 # 只會「往後 append」的檔案：合併 / rebase 時兩邊新增的行都保留，避免 GitHub Actions 與組員的 commit 互相衝突
 data/raw/youbike_raw.csv merge=union
+data/raw/youbike_official_raw.csv merge=union
 logs/collect.log merge=union

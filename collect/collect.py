@@ -8,6 +8,10 @@ collect.py — 從交通部 TDX 抓取台南市 YouBike 即時可借車數（跑
     data/stations.csv           station_id, station_name, lat, lon, capacity
                                 （只在檔案不存在 / 沒有資料時才呼叫 Station API 產生，省 TDX 點數）
     data/raw/youbike_raw.csv    fetch_time, station_id, available_bikes, available_spaces（每次 append）
+                                （主要資料：優先用 TDX；TDX 失敗或回傳空資料時改用 YouBike 官方資料補上）
+    data/raw/youbike_official_raw.csv
+                                fetch_time, station_id, available_bikes, available_spaces, source_update_time
+                                （每次 append；每次都另外記錄 YouBike 官方資料，用來和 TDX 交叉核對）
     logs/collect.log            執行紀錄、錯誤訊息、每次 API 回傳的大小（bytes，用來估算點數）
 
 執行方式（在專案根目錄）：
@@ -49,11 +53,14 @@ from dotenv import load_dotenv
 ROOT = Path(__file__).resolve().parents[1]
 STATIONS_CSV = ROOT / "data" / "stations.csv"
 RAW_CSV = ROOT / "data" / "raw" / "youbike_raw.csv"
+OFFICIAL_CSV = ROOT / "data" / "raw" / "youbike_official_raw.csv"
 LOG_FILE = ROOT / "logs" / "collect.log"
 
 # 欄位名稱是全組約定，不可更動
 STATION_COLUMNS = ["station_id", "station_name", "lat", "lon", "capacity"]
 RAW_COLUMNS = ["fetch_time", "station_id", "available_bikes", "available_spaces"]
+# YouBike 官方資料的核對用檔案：前 4 欄和 RAW_COLUMNS 相同，多一欄官方的資料更新時間
+OFFICIAL_COLUMNS = RAW_COLUMNS + ["source_update_time"]
 
 # ---------------------------------------------------------------------------
 # 參數設定
@@ -88,6 +95,11 @@ STATION_SELECT = "StationUID,StationName,StationPosition,BikesCapacity,ServiceTy
 AVAILABILITY_SELECT = "StationUID,AvailableRentBikes,AvailableReturnBikes,UpdateTime"
 # $filter 會把每個站寫進網址，網址太長時才拆成多次呼叫（正常情況只需要 1 次）
 MAX_FILTER_CHARS = 6000
+
+# 備援來源：YouBike 官方公開即時資料（全台所有站，約 6 MB，不需金鑰、不算 TDX 點數）。
+# TDX 失敗或回傳空資料時才使用。station_no = TDX StationUID 去掉前 3 碼城市代碼（TNN）。
+# 欄位對應：available_spaces = 可借車數、empty_spaces = 可還空位（兩者相加 = parking_spaces）
+YOUBIKE_OFFICIAL_URL = "https://apis.youbike.com.tw/json/station-yb2.json"
 
 REQUEST_TIMEOUT = 30  # 秒
 MAX_RETRIES = 3  # 失敗後最多重試幾次
@@ -359,33 +371,73 @@ def fetch_availability(token: str, station_ids: list[str], fetch_time: str) -> t
     if missing:
         log.warning("這次有 %d 站沒有回傳資料：%s", len(missing), ", ".join(sorted(missing)))
     if not rows:
-        raise CollectError("Availability 沒有任何可用的資料，這次不寫入")
+        raise CollectError("Availability 沒有任何可用的資料")
     latest_update = max(update_times) if update_times else "?"
     return rows, latest_update
 
 
-def append_raw(rows: list[dict]) -> None:
+def fetch_youbike_official(station_ids: list[str], fetch_time: str) -> tuple[list[dict], str]:
+    """備援：從 YouBike 官方 JSON 取可借車數，輸出格式和 fetch_availability 相同。"""
+    resp = request_with_retry("GET", YOUBIKE_OFFICIAL_URL, "YouBikeOfficial", count_points=False,
+                              headers={"Accept-Encoding": "gzip"})
+    try:
+        data = resp.json()
+    except ValueError as e:
+        raise CollectError(f"YouBike 官方資料不是 JSON：{resp.text[:200]}") from e
+    if not isinstance(data, list):
+        raise CollectError(f"YouBike 官方資料格式不是 list：{str(data)[:200]}")
+    by_no = {str(rec.get("station_no")): rec for rec in data if isinstance(rec, dict)}
+
+    rows, update_times, missing = [], [], []
+    for sid in station_ids:
+        rec = by_no.get(sid[3:])
+        if rec is None:
+            missing.append(sid)
+            continue
+        try:
+            rows.append({
+                "fetch_time": fetch_time,
+                "station_id": sid,
+                "available_bikes": int(rec["available_spaces"]),
+                "available_spaces": int(rec["empty_spaces"]),
+                "source_update_time": rec.get("updated_at") or "",
+            })
+        except (KeyError, TypeError, ValueError) as e:
+            log.warning("YouBike 官方資料欄位解析失敗，跳過 %s（%s）", sid, e)
+            continue
+        if rec.get("updated_at"):
+            update_times.append(rec["updated_at"])
+
+    if missing:
+        log.warning("YouBike 官方資料有 %d 站找不到：%s", len(missing), ", ".join(missing))
+    if not rows:
+        raise CollectError("YouBike 官方資料也沒有可用的資料，這次不寫入")
+    return rows, (max(update_times) if update_times else "?")
+
+
+def append_raw(rows: list[dict], path: Path = RAW_CSV, columns: list[str] = RAW_COLUMNS) -> None:
     """
-    append 到 youbike_raw.csv；檔案不存在（或是空的）時先寫標題列。
+    append 到 path（預設 youbike_raw.csv）；檔案不存在（或是空的）時先寫標題列。
+    rows 裡多出 columns 以外的欄位會被忽略。
     先把要寫的內容整理成一整段文字一次寫入；萬一寫到一半出錯，就把檔案切回原本的長度，
     保證不會留下半寫入的資料。
     """
-    RAW_CSV.parent.mkdir(parents=True, exist_ok=True)
-    old_size = RAW_CSV.stat().st_size if RAW_CSV.exists() else 0
+    path.parent.mkdir(parents=True, exist_ok=True)
+    old_size = path.stat().st_size if path.exists() else 0
 
     buf = io.StringIO()
     if old_size == 0:
-        buf.write(",".join(RAW_COLUMNS) + "\n")
+        buf.write(",".join(columns) + "\n")
     else:
-        with open(RAW_CSV, "rb") as f:  # 確認原本最後一行有換行，避免黏在一起
+        with open(path, "rb") as f:  # 確認原本最後一行有換行，避免黏在一起
             f.seek(-1, os.SEEK_END)
             if f.read(1) != b"\n":
                 buf.write("\n")
-    writer = csv.DictWriter(buf, fieldnames=RAW_COLUMNS, lineterminator="\n")
+    writer = csv.DictWriter(buf, fieldnames=columns, lineterminator="\n", extrasaction="ignore")
     writer.writerows(rows)
     data = buf.getvalue().encode("utf-8")
 
-    with open(RAW_CSV, "ab") as f:
+    with open(path, "ab") as f:
         try:
             f.write(data)
             f.flush()
@@ -415,18 +467,42 @@ def main(refresh_stations: bool = False) -> None:
         log.error("data/stations.csv 是假資料（FAKE 開頭），請先執行 git checkout -- data/ 還原再抓真資料")
         return
 
+    # 兩個來源互相獨立：任何一個失敗都不影響另一個寫入
+    tdx_rows, tdx_update, tdx_error = None, "?", None
     try:
         token = get_token(client_id, client_secret)
         if not station_ids:
             station_ids = [s["station_id"] for s in fetch_and_save_stations(token)]
-        rows, latest_update = fetch_availability(token, station_ids, fetch_time)
-        append_raw(rows)
+        tdx_rows, tdx_update = fetch_availability(token, station_ids, fetch_time)
     except CollectError as e:
-        log.error("%s", e)
+        tdx_error = e
+        log.error("TDX：%s", e)
+
+    if not station_ids:  # 第一次執行而且 TDX 抓不到站點清單，兩個來源都沒辦法做
         return
 
-    log.info("OK fetch_time=%s stations=%d rows=%d tdx_update=%s",
-             fetch_time, len(station_ids), len(rows), latest_update)
+    official_rows, official_update = None, "?"
+    try:
+        official_rows, official_update = fetch_youbike_official(station_ids, fetch_time)
+        append_raw(official_rows, OFFICIAL_CSV, OFFICIAL_COLUMNS)
+        log.info("OFFICIAL fetch_time=%s rows=%d official_update=%s",
+                 fetch_time, len(official_rows), official_update)
+    except CollectError as e:
+        log.error("YouBike 官方：%s", e)
+
+    # 主要資料 youbike_raw.csv：優先用 TDX，TDX 沒資料時用官方資料補上
+    if tdx_rows:
+        rows, source, latest_update = tdx_rows, "tdx", tdx_update
+    elif official_rows:
+        log.warning("TDX 沒有資料（%s），youbike_raw.csv 改用 YouBike 官方資料", tdx_error)
+        rows, source, latest_update = official_rows, "youbike_official", official_update
+    else:
+        log.error("兩個來源都沒有資料，這次不寫入 youbike_raw.csv")
+        return
+    append_raw(rows)
+
+    log.info("OK fetch_time=%s stations=%d rows=%d source=%s update=%s",
+             fetch_time, len(station_ids), len(rows), source, latest_update)
 
 
 if __name__ == "__main__":

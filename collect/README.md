@@ -2,6 +2,7 @@
 
 ## 這個資料夾負責什麼
 `collect.py` 向交通部 TDX 抓台南市 YouBike 的即時可借車數，只留下成大周圍 1.5 公里內的站（目前 61 站），存成 CSV。
+同一次執行也會另外抓 **YouBike 官方公開資料**存成另一份 CSV，用來和 TDX 交叉核對；TDX 失敗或回傳空資料時，主要資料也會改用官方資料補上。
 **跑一次抓一次就結束**，每 15 分鐘自動執行要交給排程（本機排程或 GitHub Actions，見下方）。
 
 ## TDX 點數限制（重要）
@@ -22,22 +23,40 @@
 - TDX API（[官方 Swagger 文件](https://tdx.transportdata.tw/api-service/swagger/basic/2cc9b888-a592-496f-99de-9ab35b7fb70d)，公共自行車 Basic v2）：
   - `GET /api/basic/v2/Bike/Station/City/Tainan`：站點（StationUID、StationName.Zh_tw、StationPosition.PositionLat / PositionLon、BikesCapacity）
   - `GET /api/basic/v2/Bike/Availability/City/Tainan`：即時車數（StationUID、AvailableRentBikes、AvailableReturnBikes、UpdateTime）
+- YouBike 官方公開資料（不需金鑰、**不算 TDX 點數**，每次約 6 MB，內容是全台所有站）：
+  - `GET https://apis.youbike.com.tw/json/station-yb2.json`
+  - 對應方式：官方 `station_no` = TDX `StationUID` 去掉前 3 碼城市代碼（`TNN501321004` → `501321004`），61 站全部對得上。
+  - 欄位對應：`available_spaces` → 可借車數、`empty_spaces` → 可還空位、`updated_at` → 資料更新時間。
+    （官方的 `available_spaces` 意思是「可借」，名稱容易搞混；可借 + 可還 = `parking_spaces` 總車位。）
+  - 這不是有正式文件的 API，網址或欄位可能會改，所以只當作核對和備援用。
 
 ## 輸出
 | 檔案 | 寫入方式 | 欄位 |
 |---|---|---|
 | `data/stations.csv` | 只在不存在時產生（`--refresh-stations` 時整份覆蓋） | station_id, station_name, lat, lon, capacity |
 | `data/raw/youbike_raw.csv` | 每次往後 append（不覆蓋）；不存在時先寫標題列 | fetch_time, station_id, available_bikes, available_spaces |
+| `data/raw/youbike_official_raw.csv` | 每次往後 append（不覆蓋）；不存在時先寫標題列 | fetch_time, station_id, available_bikes, available_spaces, source_update_time |
 | `logs/collect.log` | 往後 append | 每次 API 的回傳大小、成功／失敗紀錄 |
 
 - `station_id` 用 TDX 的 `StationUID`（例如 `TNN501321004`）。
 - `fetch_time` 是台灣時間 `YYYY-MM-DD HH:MM:SS`，**同一次執行的所有站都是同一個時間**。
 - 網路失敗會等 5 秒重試，最多重試 3 次；還是失敗就在 log 寫 `[ERROR]` 並正常結束，**不會寫入半份資料**。
+- 兩個來源互相獨立，一個失敗不影響另一個寫入：
+  | TDX | 官方 | `youbike_raw.csv` | `youbike_official_raw.csv` |
+  |---|---|---|---|
+  | 成功 | 成功 | 寫 TDX 資料（`source=tdx`） | 寫官方資料 |
+  | 失敗／空的 | 成功 | 寫官方資料（`source=youbike_official`） | 寫官方資料 |
+  | 成功 | 失敗 | 寫 TDX 資料 | 不寫 |
+  | 失敗／空的 | 失敗 | 不寫 | 不寫 |
 - log 的格式（`tools/check_data.py` 會讀，請不要改）：
   ```
   2026-11-23 20:55:18 [INFO] API name=Availability status=200 bytes=12095 attempt=1
-  2026-11-23 20:55:18 [INFO] OK fetch_time=2026-11-23 20:55:17 stations=61 rows=61 tdx_update=2026-11-23T20:55:17+08:00
+  2026-11-23 20:55:18 [INFO] OFFICIAL fetch_time=2026-11-23 20:55:17 rows=61 official_update=2026-11-23 20:54:40
+  2026-11-23 20:55:18 [INFO] OK fetch_time=2026-11-23 20:55:17 stations=61 rows=61 source=tdx update=2026-11-23T20:55:17+08:00
   ```
+  - `OFFICIAL` 那行是官方資料寫進 `youbike_official_raw.csv` 的紀錄。
+  - `OK` 那行的 `source=` 表示這批 `youbike_raw.csv` 來自 `tdx` 還是 `youbike_official`，`update=` 是該來源的資料更新時間。
+  - 2026-11-25 之前的 log 只有 `OK ... tdx_update=...`（當時只有 TDX 一個來源）。
 
 ## 站點篩選結果（2026-11-23）
 - 中心點 (22.997, 120.219)，在光復／成功校區交界附近。用站名含「成大／成功大學」的站校正，中心點只差約 110 公尺，所以維持不變。
@@ -139,7 +158,7 @@ macOS 補充：
 本機排程只會更新你電腦上的檔案，請每天（或每幾天）把資料推上 GitHub 給組員用：
 
 ```bash
-git add data/raw/youbike_raw.csv data/stations.csv logs/collect.log
+git add data/raw/youbike_raw.csv data/raw/youbike_official_raw.csv data/stations.csv logs/collect.log
 git commit -m "data: update"
 git pull --rebase
 git push
@@ -213,3 +232,49 @@ GitHub Actions 的 schedule 是「盡力而為」，系統忙的時候會延遲�
   | `403` / `404` | token 權限不足，或沒有選到這個 repo |
   | `422` | body 格式錯誤 |
 - 想停止收集：到 cron-job.org 把這個 job 停用（Enable job 關掉）。
+
+---
+
+## 疑難排解紀錄：TDX 回傳空資料（2026-11-25）
+
+**狀況**
+- 排程照常每 15 分鐘觸發、也照常 commit，但從 **2026-11-25 07:45** 起，幾乎每次都沒有寫入新資料。
+- `logs/collect.log` 裡是這樣：
+  ```
+  [INFO] API name=Availability status=200 bytes=2 attempt=1
+  [WARNING] Availability API 回傳是空的
+  [WARNING] 這次有 61 站沒有回傳資料：...
+  [ERROR] Availability 沒有任何可用的資料，這次不寫入
+  ```
+  `status=200`、`bytes=2` 代表 TDX 正常回應，但內容是空陣列 `[]`。
+- 07:45 到 11:45 共 17 次，只有 **08:30 那次成功**，其餘 16 次都是空的。
+
+**檢查過程**：用同一組金鑰直接打 TDX，每個查詢只有幾 KB，幾乎不花點數
+
+| 查詢 | 結果 | 代表 |
+|---|---|---|
+| 台南 Availability，只查 1 站 | `200 []` | — |
+| 台南 Availability，**不加 `$filter`** | `200 []` | 不是 filter 或站點代碼的問題 |
+| 台南 Station API | `200 []` | 連站點清單都是空的 |
+| **台北** Availability | `200 []` | 不只台南，TDX 自行車資料整體都是空的 |
+
+排除的原因：
+- 金鑰／token：錯的話會回 `401`，不會是 `200`。
+- 點數用完：不會是 `200` 加空資料。
+- 排程（GitHub Actions／cron-job.org）：commit 都有照時間出現；在本機跑也是一樣的結果。
+
+**原因**：TDX 公共自行車 API 端暫時沒有資料（上游資料中斷或 TDX 維護），不是我們程式的問題。同一時間 YouBike 官方公開資料是正常的（`updated_at` 是最新時間）。
+
+**處理方式**
+1. `collect.py` 加上第二個資料來源：每次都另外抓 YouBike 官方資料，存到 `data/raw/youbike_official_raw.csv`，可以和 TDX 交叉核對，也證明資料可信。
+2. TDX 失敗或回傳空資料時，`youbike_raw.csv` 改用官方資料補上，並在 log 記 `source=youbike_official`，資料不會再整段中斷。
+3. GitHub Actions 的 `git add` 和 `.gitattributes` 的 `merge=union` 都加上新檔案。
+
+**影響**
+- 07:45 到這次更新上線前的資料**補不回來**（兩個來源都只有「現在」的資料）。這段在 `process/clean.py` 請當成缺值處理。
+- 官方資料每次約 6 MB，在 GitHub Actions 上沒問題，也不影響 TDX 點數。
+
+**之後遇到類似狀況怎麼查**
+1. 看 `logs/collect.log`：`status=200 bytes=2` 是 TDX 回空資料；`status=401` 是金鑰問題；`status=429` 是太頻繁或點數問題。
+2. 看 `OK` 行的 `source=`：如果連續好幾批都是 `youbike_official`，代表 TDX 還沒恢復。
+3. 可以到 [TDX 官網](https://tdx.transportdata.tw/)看最新消息／系統公告。

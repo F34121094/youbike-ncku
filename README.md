@@ -10,7 +10,7 @@
 
 | 步驟 | 負責的程式 | 做什麼 |
 |---|---|---|
-| 1. 收集資料 | `collect/collect.py` | 每 15 分鐘向交通部 TDX 抓一次台南市 YouBike 即時車數，只留成大周圍 1.5 公里內的站（目前 61 站） |
+| 1. 收集資料 | `collect/collect.py` | 每 15 分鐘向交通部 TDX 抓一次台南市 YouBike 即時車數，只留成大周圍 1.5 公里內的站（目前 61 站）；同時另外記錄 YouBike 官方資料，用來交叉核對，TDX 中斷時也拿來補資料 |
 | 2. 整理資料 | `process/clean.py` | 清理資料、算出「現在車數、15/30 分鐘前車數、幾點、星期幾、天氣」等特徵 |
 | 3. 訓練模型 | `model/train.py` | 用特徵預測 30 分鐘後的可借車數，比較幾個模型的誤差 |
 | 4. 做網站 | `app/app.py` | 用 Streamlit 做網頁，在地圖上顯示每站的預測結果 |
@@ -28,7 +28,8 @@ youbike-ncku/
 ├── .env.example               ← 金鑰檔範本（複製成 .env 再填入真的金鑰）
 ├── data/
 │   ├── stations.csv           ← 站點資訊（collect.py 第一次執行時產生）
-│   ├── raw/youbike_raw.csv    ← 原始可借車數，每 15 分鐘累積一批（collect.py 產生）
+│   ├── raw/youbike_raw.csv    ← 原始可借車數，每 15 分鐘累積一批（collect.py 產生，後續步驟都用這份）
+│   ├── raw/youbike_official_raw.csv ← YouBike 官方資料，同一時間另外記一份，用來核對 TDX（collect.py 產生）
 │   └── processed/features.csv ← 整理好的特徵表（clean.py 產生）
 ├── collect/collect.py         ← 步驟 1：抓資料
 ├── process/clean.py           ← 步驟 2：整理資料
@@ -67,6 +68,20 @@ youbike-ncku/
 | station_id | 文字 | 站點代碼，對應 stations.csv | TNN501201001 |
 | available_bikes | 整數 | 可借車數 | 7 |
 | available_spaces | 整數 | 可還空位數 | 23 |
+
+- 資料來源：優先用 TDX；TDX 失敗或回傳空資料時，改用 YouBike 官方資料補上（每一批用哪個來源，記在 `logs/collect.log` 的 `source=`）。
+
+### `data/raw/youbike_official_raw.csv`（由 `collect/collect.py` 每次 append，核對用）
+
+每次執行都會另外抓 [YouBike 官方公開資料](https://apis.youbike.com.tw/json/station-yb2.json)，和 `youbike_raw.csv` 用**同一個 `fetch_time`**，所以可以用 `fetch_time + station_id` 把兩份資料對起來比較。
+
+| 欄位 | 型態 | 說明 | 範例 |
+|---|---|---|---|
+| fetch_time | 時間 | 抓取時間，和 youbike_raw.csv 同一批相同 | 2025-01-06 08:05:12 |
+| station_id | 文字 | 站點代碼，對應 stations.csv | TNN501201001 |
+| available_bikes | 整數 | 可借車數（官方欄位 `available_spaces`） | 7 |
+| available_spaces | 整數 | 可還空位數（官方欄位 `empty_spaces`） | 23 |
+| source_update_time | 時間 | 官方資料本身的更新時間（官方欄位 `updated_at`） | 2025-01-06 08:04:40 |
 
 ### `data/processed/features.csv`（由 `process/clean.py` 產生）
 
@@ -194,4 +209,5 @@ GitHub 可以幫我們每 15 分鐘（每小時的 7、22、37、52 分）在雲
 - 開啟 Actions 後，資料會由 GitHub 直接 commit，組員開始工作前請先 `git pull`，避免衝突。
   （`youbike_raw.csv` 和 `collect.log` 在 `.gitattributes` 設了 `merge=union`，兩邊都只是新增資料時會自動合併。）
 - 不要同時開「本機排程」和「GitHub Actions」，否則會重複抓、浪費 TDX 點數。
+- 資料中斷事件與處理紀錄（例如 2026-11-25 TDX 回傳空資料）見 [`collect/README.md` 的疑難排解紀錄](collect/README.md#疑難排解紀錄tdx-回傳空資料2026-11-25)。
 - public repo 的 Actions 免費；private repo 每月有免費分鐘數上限（GitHub Free 約 2,000 分鐘）。每 15 分鐘跑一次，每次至少算 1 分鐘，一個月約 2,900 分鐘，**private repo 會超過額度**，這種情況請把 repo 改成 public 或改用本機排程。

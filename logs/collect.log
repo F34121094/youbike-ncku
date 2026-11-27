@@ -1746,3 +1746,6 @@
 <hr><center>nginx</center>
 <script type="text/javascript" src="/_Incapsula_Resource?SWJIYLWA=719d34
 2026-11-27 15:45:33 [INFO] OK fetch_time=2026-11-27 15:45:30 stations=61 rows=61 source=tdx update=2026-11-27T15:45:05+08:00
+2026-11-27 16:00:46 [INFO] API name=Availability status=200 bytes=12085 attempt=1
+2026-11-27 16:00:47 [INFO] OFFICIAL fetch_time=2026-11-27 16:00:45 rows=61 official_update=2026-11-27 15:59:35
+2026-11-27 16:00:47 [INFO] OK fetch_time=2026-11-27 16:00:45 stations=61 rows=61 source=tdx update=2026-11-27T16:00:35+08:00
